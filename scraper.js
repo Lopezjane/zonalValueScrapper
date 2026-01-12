@@ -1,34 +1,32 @@
-// scraper.js - Robust version with retry logic
+// scraper.js - COMPLETE ACCURATE VERSION
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 
-// Configuration
 const CONFIG = {
     maxRetries: 3,
-    timeout: 120000, // 2 minutes
-    delayBetweenPages: 3000, // Increased to 3 seconds
+    timeout: 120000,
+    delayBetweenPages: 3000,
     startPage: 1,
-    maxPages: 3 // Set to null for unlimited
+    maxPages: 357
 };
 
-// Sleep function for older Puppeteer versions
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function scrapeWithRetry(page, url, retries = 0) {
     try {
-        console.log(`   Attempting to load... (attempt ${retries + 1})`);
+        console.log(`   Loading... (attempt ${retries + 1})`);
         
         await page.goto(url, {
-            waitUntil: 'domcontentloaded',
+            waitUntil: 'networkidle0',
             timeout: CONFIG.timeout
         });
         
-        // Wait for the actual content to appear - try multiple selectors
+        // Wait for tiles to be visible
         let contentLoaded = false;
-        for (let i = 0; i < 10; i++) {
-            await sleep(1000); // Check every second
+        for (let i = 0; i < 15; i++) {
+            await sleep(1000);
             
             const hasContent = await page.evaluate(() => {
                 const tiles = document.querySelectorAll('[class*="sv-tile"]');
@@ -37,22 +35,20 @@ async function scrapeWithRetry(page, url, retries = 0) {
             
             if (hasContent) {
                 contentLoaded = true;
-                console.log(`   ✓ Content loaded after ${i + 1} seconds`);
+                console.log(`   ✓ Content loaded after ${i + 1}s`);
                 break;
             }
         }
         
         if (!contentLoaded) {
-            throw new Error('Content did not load in time');
+            throw new Error('Content did not load');
         }
         
-        // Extra wait for any animations or delayed content
-        await sleep(2000);
-        
+        await sleep(2000); // Extra stabilization
         return true;
     } catch (error) {
         if (retries < CONFIG.maxRetries) {
-            console.log(`   ⚠ Failed, retrying... (${retries + 1}/${CONFIG.maxRetries})`);
+            console.log(`   ⚠ Retry ${retries + 1}/${CONFIG.maxRetries}`);
             await sleep(5000);
             return scrapeWithRetry(page, url, retries + 1);
         }
@@ -62,7 +58,7 @@ async function scrapeWithRetry(page, url, retries = 0) {
 
 async function scrapeZonalValues() {
     console.log('===========================================');
-    console.log('Cebu Zonal Value Scraper - ALL PAGES');
+    console.log('Cebu Zonal Value Scraper - ACCURATE');
     console.log('===========================================\n');
     
     const browser = await puppeteer.launch({
@@ -80,7 +76,7 @@ async function scrapeZonalValues() {
     await page.setViewport({ width: 1920, height: 1080 });
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
     
-    // Block images and fonts to speed up loading
+    // Block unnecessary resources
     await page.setRequestInterception(true);
     page.on('request', (req) => {
         if (req.resourceType() === 'image' || req.resourceType() === 'font') {
@@ -95,9 +91,6 @@ async function scrapeZonalValues() {
     let failedPages = [];
     let hasNextPage = true;
     
-    // Global seen set to track duplicates across ALL pages
-    const globalSeen = new Set();
-    
     try {
         while (hasNextPage && (CONFIG.maxPages === null || currentPage <= CONFIG.maxPages)) {
             console.log(`\n📄 Page ${currentPage}/${CONFIG.maxPages || '?'}`);
@@ -107,112 +100,167 @@ async function scrapeZonalValues() {
                 : `https://cebu.zonalvalue.com/?page=${currentPage}`;
             
             try {
-                // Try to load the page
                 await scrapeWithRetry(page, url);
                 
-                // Extract data
-                const pageData = await page.evaluate(() => {
+                // COMPREHENSIVE DATA EXTRACTION
+                const pageData = await page.evaluate((pageNumber) => {
                     const properties = [];
                     
-                    // Find all property cards
-                    const cards = document.querySelectorAll('.sv-tile_body');
+                    // Find all property tiles (main containers)
+                    const tiles = document.querySelectorAll('[class*="sv-tile"]');
                     
-                    cards.forEach(card => {
-                        // Must have h3 to be valid
-                        const h3 = card.querySelector('h3');
-                        if (!h3) return;
+                    tiles.forEach((tile, tileIndex) => {
+                        // Skip if this doesn't look like a main tile
+                        if (tile.querySelectorAll('h3, h2').length === 0) {
+                            return;
+                        }
                         
                         const property = {};
                         
-                        // Get Street (h3)
-                        property['Street'] = h3.textContent.trim();
+                        // ===== HEADER SECTION =====
+                        const header = tile.querySelector('[class*="sv-tile_header"]') || tile;
                         
-                        // Get Description (h4)
-                        const h4 = card.querySelector('h4');
-                        if (h4) {
-                            property['Description'] = h4.textContent.trim();
+                        // Street name (usually h3)
+                        const h3Elements = header.querySelectorAll('h3');
+                        h3Elements.forEach((h3, idx) => {
+                            const text = h3.textContent.trim();
+                            if (text && text.length > 0) {
+                                if (idx === 0) property['Street'] = text;
+                                else property[`Street_${idx}`] = text;
+                            }
+                        });
+                        
+                        // Description (usually h4)
+                        const h4Elements = header.querySelectorAll('h4');
+                        h4Elements.forEach((h4, idx) => {
+                            const text = h4.textContent.trim();
+                            if (text && text.length > 0) {
+                                if (idx === 0) property['Description'] = text;
+                                else property[`Description_${idx}`] = text;
+                            }
+                        });
+                        
+                        // Barangay (usually first p tag)
+                        const pElements = header.querySelectorAll('p');
+                        pElements.forEach((p, idx) => {
+                            const text = p.textContent.trim();
+                            if (text && text.length > 0 && text.length < 200) {
+                                if (idx === 0) property['Barangay'] = text;
+                                else property[`Location_${idx}`] = text;
+                            }
+                        });
+                        
+                        // ===== BODY SECTION - TABLE DATA =====
+                        const body = tile.querySelector('[class*="sv-tile_body"]') || tile;
+                        
+                        // Method 1: Find rows with sv-table-row class
+                        let tableRows = body.querySelectorAll('[class*="sv-table-row"]');
+                        
+                        // Method 2: If no rows found, look for any divs that might be rows
+                        if (tableRows.length === 0) {
+                            tableRows = body.querySelectorAll('[class*="table"] > div, [class*="row"]');
                         }
                         
-                        // Get Barangay (p)
-                        const p = card.querySelector('p');
-                        if (p) {
-                            property['Barangay'] = p.textContent.trim();
-                        }
-                        
-                        // Get table data
-                        const tableRows = card.querySelectorAll('[class*="table-row"]');
                         tableRows.forEach(row => {
+                            // Try to find name-value pairs
                             let nameElem = row.querySelector('[class*="sv-name"]');
                             let valueElem = row.querySelector('[class*="sv-value"]');
                             
+                            // Fallback: look for first two child divs
                             if (!nameElem || !valueElem) {
-                                const allDivs = row.querySelectorAll('div');
-                                if (allDivs.length >= 2) {
-                                    nameElem = allDivs[0];
-                                    valueElem = allDivs[1];
+                                const childDivs = row.querySelectorAll(':scope > div');
+                                if (childDivs.length >= 2) {
+                                    nameElem = childDivs[0];
+                                    valueElem = childDivs[1];
                                 }
                             }
                             
                             if (nameElem && valueElem) {
-                                const key = nameElem.textContent.trim().replace(':', '');
+                                let key = nameElem.textContent.trim();
+                                key = key.replace(/[:：]/g, '').trim(); // Remove colons
                                 const value = valueElem.textContent.trim();
-                                if (key && value && key.length < 50) {
+                                
+                                if (key && value && key.length < 100 && value.length < 500) {
                                     property[key] = value;
                                 }
                             }
                         });
                         
-                        // Get Zonal Value
-                        const allTextNodes = Array.from(card.querySelectorAll('h2, h3, h4, span, div'));
-                        const numbers = [];
-                        
-                        allTextNodes.forEach(node => {
-                            const text = node.textContent.trim();
-                            if (/^\d{1,3}(,\d{3})*(\.\d{2})?$/.test(text)) {
-                                const num = parseFloat(text.replace(/,/g, ''));
-                                if (num > 100) {
-                                    numbers.push({ text: text, value: num });
+                        // ===== FOOTER SECTION - ZONAL VALUE =====
+                        const footer = tile.querySelector('[class*="sv-tile_footer"]');
+                        if (footer) {
+                            // Get h2 (usually the zonal value)
+                            const h2Elements = footer.querySelectorAll('h2');
+                            h2Elements.forEach((h2, idx) => {
+                                const text = h2.textContent.trim();
+                                if (text && text.length > 0) {
+                                    if (idx === 0) property['Zonal Value'] = text;
+                                    else property[`Value_${idx}`] = text;
                                 }
+                            });
+                            
+                            // Get any unit information (e.g., "per sq.m.")
+                            const footerText = footer.textContent;
+                            const unitMatch = footerText.match(/per\s+[\w.]+/i);
+                            if (unitMatch) {
+                                property['Unit'] = unitMatch[0].trim();
+                            }
+                        }
+                        
+                        // ===== FALLBACK: If no zonal value found, search entire tile =====
+                        if (!property['Zonal Value']) {
+                            const allH2 = tile.querySelectorAll('h2');
+                            allH2.forEach((h2, idx) => {
+                                const text = h2.textContent.trim();
+                                // Look for number patterns (prices)
+                                if (/^\d{1,3}(,\d{3})*(\.\d{2})?$/.test(text) || text.includes('₱')) {
+                                    if (!property['Zonal Value']) {
+                                        property['Zonal Value'] = text;
+                                    }
+                                }
+                            });
+                        }
+                        
+                        // ===== ADDITIONAL DATA EXTRACTION =====
+                        // Look for any remaining labeled data we might have missed
+                        const allSpans = tile.querySelectorAll('span, label, strong');
+                        let lastLabel = null;
+                        
+                        allSpans.forEach(span => {
+                            const text = span.textContent.trim();
+                            
+                            // If it looks like a label (ends with colon)
+                            if (text.endsWith(':') || text.endsWith('：')) {
+                                lastLabel = text.replace(/[:：]/g, '').trim();
+                            } 
+                            // If we have a recent label and this looks like a value
+                            else if (lastLabel && text && text.length > 0 && text.length < 200) {
+                                if (!property[lastLabel]) { // Don't overwrite existing data
+                                    property[lastLabel] = text;
+                                }
+                                lastLabel = null;
                             }
                         });
                         
-                        if (numbers.length > 0) {
-                            numbers.sort((a, b) => b.value - a.value);
-                            property['Zonal Value'] = numbers[0].text;
-                        }
+                        // ===== QUALITY CHECK =====
+                        // Only add if we have at least street or barangay AND some data
+                        const hasLocation = property['Street'] || property['Barangay'] || property['Description'];
+                        const hasData = Object.keys(property).length > 1;
                         
-                        // Only add if has required fields
-                        if (property['Street'] && property['Zonal Value']) {
+                        if (hasLocation && hasData) {
+                            // Add metadata for debugging
+                            property['_page'] = pageNumber;
+                            property['_index'] = tileIndex;
                             properties.push(property);
                         }
                     });
                     
                     return properties;
-                });
+                }, currentPage); // Pass currentPage as parameter
                 
-                // Filter duplicates using global seen set
-                const uniquePageData = [];
-                pageData.forEach(property => {
-                    // Create unique key using ALL fields
-                    const uniqueKey = JSON.stringify({
-                        street: property['Street'] || '',
-                        desc: property['Description'] || '',
-                        barangay: property['Barangay'] || '',
-                        city: property['City'] || '',
-                        province: property['Province'] || '',
-                        classification: property['Classification'] || '',
-                        value: property['Zonal Value'] || ''
-                    });
-                    
-                    if (!globalSeen.has(uniqueKey)) {
-                        globalSeen.add(uniqueKey);
-                        uniquePageData.push(property);
-                    }
-                });
-                
-                if (uniquePageData.length > 0) {
-                    allProperties = allProperties.concat(uniquePageData);
-                    console.log(`   ✓ Found ${pageData.length} properties (${uniquePageData.length} unique)`);
+                if (pageData.length > 0) {
+                    allProperties = allProperties.concat(pageData);
+                    console.log(`   ✓ Found ${pageData.length} properties`);
                     console.log(`   📊 Total: ${allProperties.length}`);
                     
                     // Save progress every 10 pages
@@ -220,10 +268,10 @@ async function scrapeZonalValues() {
                         saveProgress(allProperties, currentPage);
                     }
                 } else {
-                    console.log(`   ⚠ No unique data found on this page`);
+                    console.log(`   ⚠ No data found`);
+                    failedPages.push(currentPage);
                 }
                 
-                // Check if we should continue
                 if (CONFIG.maxPages && currentPage >= CONFIG.maxPages) {
                     hasNextPage = false;
                 } else {
@@ -232,12 +280,11 @@ async function scrapeZonalValues() {
                 }
                 
             } catch (error) {
-                console.log(`   ❌ Failed to scrape page ${currentPage}: ${error.message}`);
+                console.log(`   ❌ Error: ${error.message}`);
                 failedPages.push(currentPage);
                 currentPage++;
                 
-                // If too many consecutive failures, stop
-                if (failedPages.length > 5) {
+                if (failedPages.length > 10) {
                     console.log('\n⚠ Too many failures. Stopping.');
                     hasNextPage = false;
                 }
@@ -247,31 +294,41 @@ async function scrapeZonalValues() {
         console.log('\n===========================================');
         console.log('✓ Scraping Complete!');
         console.log('===========================================');
-        console.log(`Pages attempted: ${currentPage - 1}`);
+        console.log(`Pages scraped: ${currentPage - 1}`);
         console.log(`Total properties: ${allProperties.length}`);
         console.log(`Failed pages: ${failedPages.length}`);
         
         if (allProperties.length > 0) {
-            // Save final results
             saveFinalResults(allProperties);
             
-            // Show sample
+            // Show field statistics
+            const allFields = new Set();
+            allProperties.forEach(prop => {
+                Object.keys(prop).forEach(key => {
+                    if (!key.startsWith('_')) allFields.add(key);
+                });
+            });
+            
+            console.log('\n📋 Data fields extracted:');
+            Array.from(allFields).sort().forEach(field => {
+                const count = allProperties.filter(p => p[field]).length;
+                console.log(`   ${field}: ${count} records`);
+            });
+            
             console.log('\n📋 Sample (first 2 records):');
             allProperties.slice(0, 2).forEach((prop, i) => {
                 console.log(`\n${i + 1}.`);
                 Object.entries(prop).forEach(([key, value]) => {
-                    console.log(`   ${key}: ${value}`);
+                    if (!key.startsWith('_')) {
+                        console.log(`   ${key}: ${value}`);
+                    }
                 });
             });
         }
         
         if (failedPages.length > 0) {
             console.log('\n⚠ Failed pages:', failedPages.join(', '));
-            console.log('You can retry these pages later by setting CONFIG.startPage');
-            
-            // Save failed pages to a file
             fs.writeFileSync('failed_pages.txt', failedPages.join('\n'));
-            console.log('✓ Failed pages saved to failed_pages.txt');
         }
         
         await browser.close();
@@ -280,9 +337,8 @@ async function scrapeZonalValues() {
     } catch (error) {
         console.error('\n❌ Fatal error:', error.message);
         
-        // Save whatever we got
         if (allProperties.length > 0) {
-            console.log(`\nSaving ${allProperties.length} properties collected so far...`);
+            console.log(`\nSaving ${allProperties.length} properties...`);
             saveFinalResults(allProperties);
         }
         
@@ -294,23 +350,31 @@ async function scrapeZonalValues() {
 function saveProgress(data, pageNum) {
     const filename = `progress_page_${pageNum}.json`;
     fs.writeFileSync(filename, JSON.stringify(data, null, 2));
-    console.log(`   💾 Progress saved to ${filename}`);
+    console.log(`   💾 Progress saved`);
 }
 
 function saveFinalResults(data) {
+    // Remove metadata before saving
+    const cleanData = data.map(prop => {
+        const clean = { ...prop };
+        delete clean._page;
+        delete clean._index;
+        return clean;
+    });
+    
     // Save JSON
     const jsonFile = 'cebu_zonal_values_complete.json';
-    fs.writeFileSync(jsonFile, JSON.stringify(data, null, 2));
+    fs.writeFileSync(jsonFile, JSON.stringify(cleanData, null, 2));
     console.log(`\n✓ Saved to ${jsonFile}`);
     
     // Save CSV
     const csvFile = 'cebu_zonal_values_complete.csv';
-    const csv = convertToCSV(data);
+    const csv = convertToCSV(cleanData);
     fs.writeFileSync(csvFile, csv);
-    console.log(`✓ Saved to ${csvFile} (Open in Excel)`);
+    console.log(`✓ Saved to ${csvFile}`);
     
     // Create summary
-    const summary = createSummary(data);
+    const summary = createSummary(cleanData);
     fs.writeFileSync('summary.json', JSON.stringify(summary, null, 2));
     console.log(`✓ Summary saved to summary.json`);
 }
@@ -318,10 +382,7 @@ function saveFinalResults(data) {
 function convertToCSV(data) {
     if (data.length === 0) return '';
     
-    // Get all unique headers
     const headers = [...new Set(data.flatMap(obj => Object.keys(obj)))];
-    
-    // Create CSV
     let csv = headers.map(h => `"${h}"`).join(',') + '\n';
     
     data.forEach(row => {
@@ -341,15 +402,13 @@ function createSummary(data) {
         timestamp: new Date().toISOString()
     };
     
-    // Count by city
     const cities = {};
     data.forEach(prop => {
         const city = prop.City || 'Unknown';
         cities[city] = (cities[city] || 0) + 1;
     });
-    summary.byCities = cities;
+    summary.byCity = cities;
     
-    // Count by classification
     const classifications = {};
     data.forEach(prop => {
         const cls = prop.Classification || 'Unknown';
@@ -365,18 +424,18 @@ function createSummary(data) {
     return summary;
 }
 
-// Run the scraper
+// RUN
 console.log('⏳ Starting in 3 seconds...\n');
 console.log('Configuration:');
 console.log(`   Timeout: ${CONFIG.timeout / 1000}s`);
-console.log(`   Max retries: ${CONFIG.maxRetries}`);
-console.log(`   Delay between pages: ${CONFIG.delayBetweenPages / 1000}s`);
-console.log(`   Max pages: ${CONFIG.maxPages || 'unlimited'}\n`);
+console.log(`   Retries: ${CONFIG.maxRetries}`);
+console.log(`   Delay: ${CONFIG.delayBetweenPages / 1000}s`);
+console.log(`   Pages: ${CONFIG.maxPages || 'all'}\n`);
 
 setTimeout(() => {
     scrapeZonalValues()
         .then(() => {
-            console.log('\n✅ All done! Check these files:');
+            console.log('\n✅ All done!');
             console.log('   📊 cebu_zonal_values_complete.csv');
             console.log('   📄 cebu_zonal_values_complete.json');
             console.log('   📈 summary.json\n');
@@ -384,10 +443,6 @@ setTimeout(() => {
         })
         .catch(error => {
             console.error('\n❌ Failed:', error.message);
-            console.log('\nTips:');
-            console.log('   - Check your internet connection');
-            console.log('   - Try running again (progress is saved)');
-            console.log('   - Check if any progress_page_*.json files were created\n');
             process.exit(1);
         });
 }, 3000);
